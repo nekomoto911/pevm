@@ -62,12 +62,14 @@ pub fn bench(c: &mut Criterion, name: &str, storage: InMemoryStorage, txs: Vec<T
     group.finish();
 }
 
-pub fn bench_raw_transfers(c: &mut Criterion) {
+pub fn bench_raw_transfers(c: &mut Criterion, db_latency_us: u64) {
     let block_size = (GIGA_GAS as f64 / common::RAW_TRANSFER_GAS_LIMIT as f64).ceil() as usize;
+    let mut storage = InMemoryStorage::new((0..=block_size).map(common::mock_account), None, []);
+    storage.latency_us = db_latency_us;
     bench(
         c,
         "Independent Raw Transfers",
-        InMemoryStorage::new((0..=block_size).map(common::mock_account), None, []),
+        storage,
         (1..=block_size)
             .map(|i| {
                 let address = Address::from(U160::from(i));
@@ -116,7 +118,11 @@ pub fn bench_uniswap(c: &mut Criterion) {
 }
 
 pub fn benchmark_gigagas(c: &mut Criterion) {
-    bench_raw_transfers(c);
+    let db_latency_us = std::env::var_os("DB_LATENCY_US")
+        .map(|s| s.to_string_lossy().parse().unwrap())
+        .unwrap_or(0);
+
+    bench_raw_transfers(c, db_latency_us);
     bench_erc20(c);
     bench_uniswap(c);
 }

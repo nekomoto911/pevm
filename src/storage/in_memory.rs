@@ -11,6 +11,8 @@ pub struct InMemoryStorage<'a> {
     accounts: ChainState,
     bytecodes: Option<&'a Bytecodes>,
     block_hashes: BlockHashes,
+    /// Simulated query latency in microseconds
+    pub latency_us: u64,
 }
 
 impl<'a> InMemoryStorage<'a> {
@@ -24,6 +26,7 @@ impl<'a> InMemoryStorage<'a> {
             accounts: accounts.into_iter().collect(),
             bytecodes,
             block_hashes: block_hashes.into_iter().collect(),
+            latency_us: 0,
         }
     }
 }
@@ -33,6 +36,9 @@ impl<'a> Storage for InMemoryStorage<'a> {
     type Error = u8;
 
     fn basic(&self, address: &Address) -> Result<Option<AccountBasic>, Self::Error> {
+        if self.latency_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(self.latency_us));
+        }
         Ok(self.accounts.get(address).map(|account| AccountBasic {
             balance: account.balance,
             nonce: account.nonce,
@@ -47,6 +53,9 @@ impl<'a> Storage for InMemoryStorage<'a> {
     }
 
     fn code_by_hash(&self, code_hash: &B256) -> Result<Option<EvmCode>, Self::Error> {
+        if self.latency_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(self.latency_us));
+        }
         Ok(match self.bytecodes {
             Some(bytecodes) => bytecodes.get(code_hash).cloned(),
             None => None,
@@ -61,6 +70,9 @@ impl<'a> Storage for InMemoryStorage<'a> {
     }
 
     fn storage(&self, address: &Address, index: &U256) -> Result<U256, Self::Error> {
+        if self.latency_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(self.latency_us));
+        }
         Ok(self
             .accounts
             .get(address)
@@ -70,6 +82,9 @@ impl<'a> Storage for InMemoryStorage<'a> {
     }
 
     fn block_hash(&self, number: &u64) -> Result<B256, Self::Error> {
+        if self.latency_us > 0 {
+            std::thread::sleep(std::time::Duration::from_micros(self.latency_us));
+        }
         Ok(self
             .block_hashes
             .get(number)
