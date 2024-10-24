@@ -26,8 +26,8 @@ pub mod uniswap;
 
 const GIGA_GAS: u64 = 1_000_000_000;
 
-#[global_allocator]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+//#[global_allocator]
+//static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub fn bench(c: &mut Criterion, name: &str, storage: InMemoryStorage, txs: Vec<TxEnv>) {
     let concurrency_level = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
@@ -64,15 +64,23 @@ pub fn bench(c: &mut Criterion, name: &str, storage: InMemoryStorage, txs: Vec<T
 
 pub fn bench_raw_transfers(c: &mut Criterion, db_latency_us: u64) {
     let block_size = (GIGA_GAS as f64 / common::RAW_TRANSFER_GAS_LIMIT as f64).ceil() as usize;
-    let mut storage = InMemoryStorage::new((0..=block_size).map(common::mock_account), None, []);
+    const START_ADDRESS: usize = 1000;
+    const MINER_ADDRESS: usize = 0;
+    let mut storage = InMemoryStorage::new(
+        std::iter::once(MINER_ADDRESS)
+            .chain(START_ADDRESS..START_ADDRESS + block_size)
+            .map(common::mock_account),
+        None,
+        [],
+    );
     storage.latency_us = db_latency_us;
     bench(
         c,
         "Independent Raw Transfers",
         storage,
-        (1..=block_size)
+        (0..block_size)
             .map(|i| {
-                let address = Address::from(U160::from(i));
+                let address = Address::from(U160::from(START_ADDRESS + i));
                 TxEnv {
                     caller: address,
                     transact_to: TransactTo::Call(address),
@@ -87,7 +95,7 @@ pub fn bench_raw_transfers(c: &mut Criterion, db_latency_us: u64) {
 }
 
 pub fn bench_erc20(c: &mut Criterion) {
-    let block_size = (GIGA_GAS as f64 / erc20::GAS_LIMIT as f64).ceil() as usize;
+    let block_size = (GIGA_GAS as f64 / erc20::ESTIMATED_GAS_USED as f64).ceil() as usize;
     let (mut state, bytecodes, txs) = erc20::generate_cluster(block_size, 1, 1);
     state.insert(Address::ZERO, EvmAccount::default()); // Beneficiary
     bench(
@@ -99,7 +107,7 @@ pub fn bench_erc20(c: &mut Criterion) {
 }
 
 pub fn bench_uniswap(c: &mut Criterion) {
-    let block_size = (GIGA_GAS as f64 / uniswap::GAS_LIMIT as f64).ceil() as usize;
+    let block_size = (GIGA_GAS as f64 / uniswap::ESTIMATED_GAS_USED as f64).ceil() as usize;
     let mut final_state = ChainState::from_iter([(Address::ZERO, EvmAccount::default())]); // Beneficiary
     let mut final_bytecodes = Bytecodes::default();
     let mut final_txs = Vec::<TxEnv>::new();
