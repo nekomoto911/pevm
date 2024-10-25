@@ -94,19 +94,16 @@ pub fn bench_raw_transfers(c: &mut Criterion, db_latency_us: u64) {
     );
 }
 
-pub fn bench_erc20(c: &mut Criterion) {
+pub fn bench_erc20(c: &mut Criterion, db_latency_us: u64) {
     let block_size = (GIGA_GAS as f64 / erc20::ESTIMATED_GAS_USED as f64).ceil() as usize;
     let (mut state, bytecodes, txs) = erc20::generate_cluster(block_size, 1, 1);
     state.insert(Address::ZERO, EvmAccount::default()); // Beneficiary
-    bench(
-        c,
-        "Independent ERC20",
-        InMemoryStorage::new(state, Some(&bytecodes), []),
-        txs,
-    );
+    let mut storage = InMemoryStorage::new(state.clone(), Some(&bytecodes), []);
+    storage.latency_us = db_latency_us;
+    bench(c, "Independent ERC20", storage, txs);
 }
 
-pub fn bench_uniswap(c: &mut Criterion) {
+pub fn bench_uniswap(c: &mut Criterion, db_latency_us: u64) {
     let block_size = (GIGA_GAS as f64 / uniswap::ESTIMATED_GAS_USED as f64).ceil() as usize;
     let mut final_state = ChainState::from_iter([(Address::ZERO, EvmAccount::default())]); // Beneficiary
     let mut final_bytecodes = Bytecodes::default();
@@ -117,12 +114,9 @@ pub fn bench_uniswap(c: &mut Criterion) {
         final_bytecodes.extend(bytecodes);
         final_txs.extend(txs);
     }
-    bench(
-        c,
-        "Independent Uniswap",
-        InMemoryStorage::new(final_state, Some(&final_bytecodes), []),
-        final_txs,
-    );
+    let mut storage = InMemoryStorage::new(final_state.clone(), Some(&final_bytecodes), []);
+    storage.latency_us = db_latency_us;
+    bench(c, "Independent Uniswap", storage, final_txs);
 }
 
 pub fn benchmark_gigagas(c: &mut Criterion) {
@@ -131,8 +125,8 @@ pub fn benchmark_gigagas(c: &mut Criterion) {
         .unwrap_or(0);
 
     bench_raw_transfers(c, db_latency_us);
-    bench_erc20(c);
-    bench_uniswap(c);
+    bench_erc20(c, db_latency_us);
+    bench_uniswap(c, db_latency_us);
 }
 
 criterion_group!(benches, benchmark_gigagas);
