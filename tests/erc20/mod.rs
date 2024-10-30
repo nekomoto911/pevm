@@ -14,6 +14,56 @@ fn generate_addresses(length: usize) -> Vec<Address> {
     (0..length).map(|_| Address::new(rand::random())).collect()
 }
 
+/// Return a tuple of (state, bytecodes, eoa_addresses, sca_addresses)
+pub(crate) fn generate_clusters(
+    num_eoa: usize,
+    num_sca: usize,
+) -> (ChainState, Bytecodes, Vec<Address>, Vec<Address>) {
+    let mut state = ChainState::default();
+    let eoa_addresses: Vec<Address> = generate_addresses(num_eoa);
+
+    for person in eoa_addresses.iter() {
+        state.insert(
+            *person,
+            EvmAccount {
+                balance: uint!(4_567_000_000_000_000_000_000_U256),
+                ..EvmAccount::default()
+            },
+        );
+    }
+
+    let (contract_accounts, bytecodes) = generate_contract_accounts(num_sca, &eoa_addresses);
+    let mut erc20_sca_addresses = Vec::with_capacity(num_sca);
+    for (addr, sca) in contract_accounts {
+        state.insert(addr, sca);
+        erc20_sca_addresses.push(addr);
+    }
+
+    (state, bytecodes, eoa_addresses, erc20_sca_addresses)
+}
+
+/// Return a tuple of (contract_accounts, bytecodes)
+pub(crate) fn generate_contract_accounts(
+    num_sca: usize,
+    eoa_addresses: &[Address],
+) -> (Vec<(Address, EvmAccount)>, Bytecodes) {
+    let mut accounts = Vec::with_capacity(num_sca);
+    let mut bytecodes = Bytecodes::default();
+    for _ in 0..num_sca {
+        let gld_address = Address::new(rand::random());
+        let mut gld_account =
+            ERC20Token::new("Gold Token", "GLD", 18, 222_222_000_000_000_000_000_000u128)
+                .add_balances(&eoa_addresses, uint!(1_000_000_000_000_000_000_U256))
+                .build();
+        bytecodes.insert(
+            gld_account.code_hash.unwrap(),
+            gld_account.code.take().unwrap(),
+        );
+        accounts.push((gld_address, gld_account));
+    }
+    (accounts, bytecodes)
+}
+
 pub fn generate_cluster(
     num_families: usize,
     num_people_per_family: usize,
