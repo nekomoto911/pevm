@@ -29,11 +29,19 @@ pub mod uniswap;
 
 const GIGA_GAS: u64 = 1_000_000_000;
 
-//#[global_allocator]
-//static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 pub fn bench(c: &mut Criterion, name: &str, storage: InMemoryStorage, txs: Vec<TxEnv>) {
-    let concurrency_level = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+    let concurrency: usize = std::env::var("CONCURRENCY")
+        .map(|s| s.parse().unwrap())
+        .unwrap_or(0);
+    let concurrency_level = if concurrency > 0 {
+        NonZeroUsize::new(concurrency).unwrap()
+    } else {
+        thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
+    };
+    println!("Concurrency level: {}", concurrency_level);
     let chain = PevmEthereum::mainnet();
     let spec_id = SpecId::LATEST;
     let block_env = BlockEnv::default();
