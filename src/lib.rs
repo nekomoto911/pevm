@@ -171,6 +171,7 @@ type ReadOrigins = SmallVec<[ReadOrigin; 1]>;
 
 // For validation: a list of read origins (previous transaction versions)
 // for each read memory location.
+// neko: 用 vec<ReadOrigin> 也是因为 lazy update 优化，对 account 的两次读取的最后版本一致，但是中间 lazy update 的序列不一致，也是冲突的
 type ReadSet = HashMap<MemoryLocationHash, ReadOrigins, BuildIdentityHasher>;
 
 // The updates made by this transaction incarnation, which is applied

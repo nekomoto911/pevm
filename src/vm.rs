@@ -164,7 +164,9 @@ impl<'a, S: Storage, C: PevmChain> VmDb<'a, S, C> {
         // TODO: Only lazy update in block syncing mode, not for block
         // building.
         if let TxKind::Call(to) = tx.transact_to {
+            // neko: 如果不在 MvMemory 中，就需要从 storage 读，可能有IO开销
             db.to_code_hash = db.get_code_hash(to)?;
+            // neko: code_hash 为空，说明 to 是 EOA，执行的是 raw transfer，走 lazy update 优化
             db.is_lazy = db.to_code_hash.is_none()
                 && (vm.mv_memory.data.contains_key(&from_hash)
                     || vm.mv_memory.data.contains_key(&to_hash.unwrap()));
@@ -245,6 +247,7 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
         // We return a mock for non-contract addresses (for lazy updates) to avoid
         // unnecessarily evaluating its balance here.
         if self.is_lazy {
+            // neko: lazy update 优化，不用把 raw transfer 的 account 放进 read set
             if location_hash == self.from_hash {
                 return Ok(Some(AccountInfo {
                     nonce: self.tx.nonce.unwrap_or(1),
@@ -257,7 +260,9 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
             }
         }
 
+        // neko: read_origins 是在该 Incarnation 执行 Tx 中所有访问该 entry 的版本记录
         let read_origins = self.read_set.entry(location_hash).or_default();
+        // neko: has_prev_origins: 该 Incarnation 执行 Tx 中访问过该 location 与否
         let has_prev_origins = !read_origins.is_empty();
         // We accumulate new origins to either:
         // - match with the previous origins to check consistency
@@ -279,6 +284,8 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
                 loop {
                     match iter.next_back() {
                         Some((blocking_idx, MemoryEntry::Estimate)) => {
+                            // neko: 只要有 TxId 更小的 Estimate，就要 abort 重试
+                            // Block-STM 中也是这么做的，但是不去 abort 也不会影响正确性，只是这个 Tx 大概率会冲突浪费CPU
                             return Err(ReadError::Blocking(*blocking_idx))
                         }
                         Some((closest_idx, MemoryEntry::Data(tx_incarnation, value))) => {
@@ -300,6 +307,7 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
                             }
                             new_origins.push(origin);
                             match value {
+                                // neko: 找到第一个覆盖写的版本，lazy update 在该版本上求值
                                 MemoryValue::Basic(basic) => {
                                     // TODO: Return [SelfDestructedAccount] if [basic] is
                                     // [SelfDestructed]?
@@ -309,6 +317,7 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
                                     break;
                                 }
                                 MemoryValue::LazyRecipient(addition) => {
+                                    // neko: 因为 unsigned 搞出来的复杂逻辑
                                     if positive_addition {
                                         balance_addition =
                                             balance_addition.saturating_add(*addition);
@@ -339,6 +348,8 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
         }
 
         // Fall back to storage
+        // neko: 如果读到的历史版本全是 lazy update，也需要从 storage 读 account 来求值到 account balance 上
+        // 只有调用合约才会执行到这去对 lazy update 求值
         if final_account.is_none() {
             // Populate [Storage] on the first read
             if !has_prev_origins {
@@ -371,12 +382,14 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
         }
 
         if let Some(mut account) = final_account {
+            // neko: lazy update 求值 balance 和 nonce 累加到 final account
             // Check sender nonce
             account.nonce += nonce_addition;
             if location_hash == self.from_hash
                 && self.tx.nonce.is_some_and(|nonce| nonce != account.nonce)
             {
                 if self.tx_idx > 0 {
+                    // neko: 如果是 Tx 传了错误的 nonce 重试也无法成功，会如何呢？
                     // TODO: Better retry strategy -- immediately, to the
                     // closest sender tx, to the missing sender tx, etc.
                     return Err(ReadError::Blocking(self.tx_idx - 1));
@@ -398,6 +411,7 @@ impl<'a, S: Storage, C: PevmChain> Database for VmDb<'a, S, C> {
             } else {
                 self.get_code_hash(address)?
             };
+            // neko: 不去设置 code 而是在 `code_by_hash` 接口去实现 cache 读如何呢？
             let code = if let Some(code_hash) = &code_hash {
                 if let Some(code) = self.vm.mv_memory.new_bytecodes.get(code_hash) {
                     Some(code.clone())
@@ -554,6 +568,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
             .map(|to| hash_determinisitic(MemoryLocation::Basic(*to)));
 
         // Execute
+        // neko: VmDb 带上了 tx 上下文，实现的 Database trait 中 hook 了一些 lazy update、冲突预判操作
         let mut db = VmDb::new(self, tx_version.tx_idx, tx, from_hash, to_hash)
             .map_err(VmExecutionError::from)?;
         // TODO: Share as much [Evm], [Context], [Handler], etc. among threads as possible
@@ -586,6 +601,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                     if account.is_touched() {
                         let account_location_hash =
                             hash_determinisitic(MemoryLocation::Basic(*address));
+                        // neko: read_account 是已经进行 lazy update 求值后的
                         let read_account = evm.db().read_accounts.get(&account_location_hash);
 
                         let has_code = !account.info.is_empty_code_hash();
@@ -601,6 +617,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                             })
                         {
                             if evm.db().is_lazy {
+                                // neko: lazy update 优化，只记录 add/sub 的值用于与合约写 account 区分，减少不必要的冲突重试
                                 if account_location_hash == from_hash {
                                     write_set.push((
                                         account_location_hash,
@@ -656,6 +673,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                     }
                 }
 
+                // neko: 把 coinbase 放进 write set
                 self.apply_rewards(
                     &mut write_set,
                     tx,
@@ -674,6 +692,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                 let mut flags = if tx_version.tx_idx > 0 && !db.is_lazy {
                     FinishExecFlags::NeedValidation
                 } else {
+                    // neko: raw transfer 不需要验证
                     FinishExecFlags::empty()
                 };
 
@@ -690,6 +709,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                     flags,
                 })
             }
+            // neko: Tx 执行中，Database 接口会在遇到 Estimate 或者读到不一致的版本时，直接报错终止执行抛出 EVMError::Database
             Err(EVMError::Database(read_error)) => Err(read_error.into()),
             Err(err) => {
                 // Optimistically retry in case some previous internal transactions send
@@ -780,9 +800,11 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                 .find(|(location, _)| location == &recipient)
             {
                 match value {
+                    // neko: coinbase 参与合约执行
                     MemoryValue::Basic(basic) => {
                         basic.balance = basic.balance.saturating_add(amount)
                     }
+                    // neko: coinbase 参与了 raw transfer
                     MemoryValue::LazySender(subtraction) => {
                         *subtraction = subtraction.saturating_sub(amount)
                     }
@@ -792,6 +814,7 @@ impl<'a, S: Storage, C: PevmChain> Vm<'a, S, C> {
                     _ => return Err(ReadError::InvalidMemoryValueType.into()),
                 }
             } else {
+                // neko: coinbase 没有参与 Tx
                 write_set.push((recipient, MemoryValue::LazyRecipient(amount)));
             }
         }

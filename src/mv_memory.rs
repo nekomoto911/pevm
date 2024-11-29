@@ -90,11 +90,13 @@ impl MvMemory {
         read_set: ReadSet,
         write_set: WriteSet,
     ) -> bool {
+        // neko: 更新 Tx last_locations 中的 read set
         let mut last_locations = index_mutex!(self.last_locations, tx_version.tx_idx);
         last_locations.read = read_set;
 
         // TODO: Group updates by shard to avoid locking operations.
         // Remove old locations that aren't written to anymore.
+        // neko: 删除 Tx write set 中不再写入的 location
         let mut last_location_idx = 0;
         while last_location_idx < last_locations.write.len() {
             let prev_location = unsafe { last_locations.write.get_unchecked(last_location_idx) };
@@ -111,6 +113,8 @@ impl MvMemory {
         // Register new writes.
         let mut wrote_new_location = false;
 
+        // neko: 把这个 Incarnation 的 write 版本记录到 MvMemory 中，会覆盖掉之前 Incarnation 中该 Tx 写入的值
+        // last_locations.write 用于判断是否写入了新的 location，如果写入了新的 location，那么需要重新验证已经执行完成的 TxId 更大的 Tx
         for (location, value) in write_set {
             self.data.entry(location).or_default().insert(
                 tx_version.tx_idx,
@@ -138,6 +142,8 @@ impl MvMemory {
     // validations that successfully abort affect the state and each incarnation
     // can be aborted at most once).
     pub(crate) fn validate_read_locations(&self, tx_idx: TxIdx) -> bool {
+        // neko: 验证 location 的版本序列是否和 Tx 执行读到的一致
+        // 只有 basic accout 因为 lazy update 导致 origins.len() > 1，其他类型的 origins.len() == 1 即仅需记录最近一次读的版本
         for (location, prior_origins) in index_mutex!(self.last_locations, tx_idx).read.iter() {
             if let Some(written_transactions) = self.data.get(location) {
                 let mut iter = written_transactions.range(..tx_idx);
@@ -180,6 +186,8 @@ impl MvMemory {
     // that read them.
     pub(crate) fn convert_writes_to_estimates(&self, tx_idx: TxIdx) {
         for location in index_mutex!(self.last_locations, tx_idx).write.iter() {
+            // neko: 如果该 Tx 检查出冲突，所有写过的 location 都会标记成 Estimate
+            // 意味着 lazy updayte 和仅用于 rewards 的 coinbase 也会标记成 Estimate
             if let Some(mut written_transactions) = self.data.get_mut(location) {
                 written_transactions.insert(tx_idx, MemoryEntry::Estimate);
             }

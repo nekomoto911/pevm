@@ -206,6 +206,7 @@ impl Scheduler {
         debug_assert_eq!(tx.incarnation, tx_version.tx_incarnation);
 
         // Resume dependent transactions
+        // neko: 帮助 scheduler 调度依赖于这个 Tx 的 Tx
         let mut dependents = index_mutex!(self.transactions_dependents, tx_version.tx_idx);
         for tx_idx in dependents.drain(..) {
             self.set_ready_status(tx_idx);
@@ -236,6 +237,7 @@ impl Scheduler {
             // validation index.
             else if tx_version.tx_idx < self.validation_idx.load(Ordering::Acquire) {
                 if flags.contains(FinishExecFlags::WroteNewLocation) {
+                    // neko: Tx 的写集有新的 location，需要重新验证 TxId 更大的 Tx
                     self.validation_idx
                         .fetch_min(tx_version.tx_idx + 1, Ordering::Release);
                 }
@@ -243,6 +245,7 @@ impl Scheduler {
                     tx.status = IncarnationStatus::Executed;
                     return Some(Task::Validation(tx_version));
                 } else {
+                    // neko: raw transfer 或者第一个 Tx，直接标记为 Validated，不需要验证
                     tx.status = IncarnationStatus::Validated;
                     self.num_validated.fetch_add(1, Ordering::Release);
                 }

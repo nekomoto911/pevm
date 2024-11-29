@@ -275,6 +275,8 @@ impl Pevm {
                                         .saturating_mul(U256::from(blob_fee)),
                                 );
                             }
+                            // neko: ETH 是否会出现 sender 余额不足的 Tx 打包进 Block？
+                            // 如果存在这种 Tx，串行执行应该仅仅是这个 Tx 无法成功，而不是整个 Block 无法执行，那么 pevm 这样让整个 Block 无法执行是不是有问题？
                             if balance < max_fee {
                                 return Err(PevmError::ExecutionError(
                                     "Transaction(LackOfFundForMaxFee)".to_string(),
@@ -342,15 +344,18 @@ impl Pevm {
                     None
                 }
                 Err(VmExecutionError::FallbackToSequential) => {
+                    // neko: 终止并行执行，退化成顺序执行，通知 scheduler 退出 next_task 循环
                     scheduler.abort();
                     self.abort_reason
                         .get_or_init(|| AbortReason::FallbackToSequential);
                     None
                 }
                 Err(VmExecutionError::Blocking(blocking_tx_idx)) => {
+                    // neko: Blocking 表示这个 Tx 依赖的 Tx 还没有执行完成（执行到 MvMemory::record）
                     if !scheduler.add_dependency(tx_version.tx_idx, blocking_tx_idx)
                         && self.abort_reason.get().is_none()
                     {
+                        // neko: add_dependency 返回 false 表示 blocking_tx_idx 已经执行完成，可以立即重试该 Tx
                         // Retry the execution immediately if the blocking transaction was
                         // re-executed by the time we can add it as a dependency.
                         continue;
@@ -384,6 +389,8 @@ fn try_validate(
     let read_set_valid = mv_memory.validate_read_locations(tx_version.tx_idx);
     let aborted = !read_set_valid && scheduler.try_validation_abort(tx_version);
     if aborted {
+        // neko: validate 失败，把这次执行 Tx 涉及的写集都标记为 ESTIMATE，后续 Tx 读到这些 location 会返回 Blocking
+        // 影响调度顺序，不影响正确性
         mv_memory.convert_writes_to_estimates(tx_version.tx_idx);
     }
     scheduler.finish_validation(tx_version, aborted)
